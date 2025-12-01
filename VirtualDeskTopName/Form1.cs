@@ -7,8 +7,10 @@ using System.Drawing.Drawing2D;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Collections;
 
 namespace VirtualDeskTopName
 {
@@ -28,7 +30,18 @@ namespace VirtualDeskTopName
         public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 
         private Queue<string> _desktops = new Queue<string>();
+        private Queue<string> _switches;
 
+       
+        private Dictionary<string, int> _deskTopCoords;
+        private string _currentDesktop = "Administration";
+        private string _destinationDesktop = "Research";
+        private int _directionMultiplier = 1;
+        private List<string> _actions = new List<string>();
+        private bool _animationInProgress = false;
+        private int _currentYPos = 10;
+        private ManualResetEvent _event;
+        private System.Timers.Timer _animationTimer;
 
         public Form1()
         {
@@ -42,11 +55,16 @@ namespace VirtualDeskTopName
             _shell = (IServiceProvider10)Activator.CreateInstance(Type.GetTypeFromCLSID(Guids.CLSID_ImmersiveShell));
             _manager = (IVirtualDesktopManagerInternal)_shell.QueryService(Guids.CLSID_VirtualDesktopManagerInternal, typeof(IVirtualDesktopManagerInternal).GUID);
             SetShape();
+
+            _event = new ManualResetEvent(true);
+            SetupBitmap();
             timer1.Interval = 1000;
             timer1.Tick += timer1_Tick;
             timer1.Start();
             SetLocation();
         }
+
+        Action<string> log = x => System.Diagnostics.Debug.WriteLine(x);
 
         protected override void OnShown(EventArgs e)
         {
@@ -61,11 +79,20 @@ namespace VirtualDeskTopName
         {
             //base.OnPaint(e);
             e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
-            if(_bitmap != null)
-                e.Graphics.DrawImage(_bitmap,0,0);
-
-
+            if (_bitmap != null)
+                DrawImage(e.Graphics);
+        
         }
+
+        private void DrawImage(Graphics g)
+        {
+            var sourceRect = new Rectangle(10, _currentYPos, 200, 25);
+            var destRect = new Rectangle(15, 10, 200, 25);
+            log($"DrawImage with currentYPos : {_currentYPos}");
+            g.DrawImage(_bitmap, destRect, sourceRect, GraphicsUnit.Pixel);
+        }
+
+
 
         private void Draw()
         {
@@ -184,10 +211,16 @@ namespace VirtualDeskTopName
 
         private void timer1_Tick(object sender, EventArgs e)
         {
-            Draw();
-            this.Invalidate();
-
+            var curr = _manager.GetCurrentDesktop();
+            var vdname = curr.GetName();
+            if(vdname != _currentDesktop)
+            {
+                _destinationDesktop = vdname;
+                StartAnimation();
+            }
+           
         }
+
         private void SetLocation()
         {
             // Check location to see if it is offscreen
@@ -229,6 +262,7 @@ namespace VirtualDeskTopName
         private void Form1_FormClosing(object sender, FormClosingEventArgs e)
         {
             timer1.Stop();
+            AnimationTimer.Stop();
             SaveLocation();
         }
 
@@ -244,5 +278,192 @@ namespace VirtualDeskTopName
         {
             var j = 1;
         }
+    
+    
+        private void SetupBitmap()
+        {
+            _bitmap = new Bitmap(200, 300);
+
+            Graphics g = Graphics.FromImage(_bitmap);
+
+
+            Color clr = Color.Black;
+            SolidBrush brush = new SolidBrush(clr);
+            g.Clear(clr);
+
+            clr = Color.White;
+            brush = new SolidBrush(clr);
+            Pen pen = new Pen(brush, 1);
+            Font fnt = new Font("Reddis Sans", 14);
+            
+            Rectangle rect = new Rectangle(0, 10, 200, 25);
+            g.DrawString("Administration", fnt, brush, rect, new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center });
+
+            rect = new Rectangle(0, 55, 200, 25);
+            g.DrawString("Development", fnt, brush, rect, new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center });
+
+            rect = new Rectangle(0, 100, 200, 25);
+            g.DrawString("Research", fnt, brush, rect, new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center });
+
+            var curr = _manager.GetCurrentDesktop();
+            var vdname = curr.GetName();
+            _currentDesktop = vdname;
+
+            _deskTopCoords = new Dictionary<string, int>();
+            _deskTopCoords["Administration"] = 10;
+            _deskTopCoords["Development"] = 55;
+            _deskTopCoords["Research"] = 100;
+
+            _currentYPos = _deskTopCoords[_currentDesktop];
+            _switches = new Queue<string>();
+        }
+
+        private void StartAnimation()
+        {
+            try
+            {
+                log("StartAnimation waiting");
+                if(_animationTimer == null)
+                {
+                    _animationTimer = new System.Timers.Timer();
+                    _animationTimer.Elapsed += _animationTimer_Elapsed;
+                }
+
+                if (_animationInProgress)
+                {
+                    log("Animation in progress ... returning");
+                    return;
+                }
+                    
+              
+                _event.WaitOne();
+                
+                // lock the event, block until animation is done
+                _event.Reset();
+                
+                _currentYPos = _deskTopCoords[_currentDesktop];
+                var tmp = _deskTopCoords[_destinationDesktop];
+                _directionMultiplier = _currentYPos <= tmp ? 1 : -1;
+                
+                _animationTimer.Stop();
+                
+                _animationTimer.Interval = 25; //16;
+                _animationInProgress = true;
+                
+                _animationTimer.Start();
+                
+                
+            }catch(Exception ex)
+            {
+                var j = ex;
+            }
+        }
+
+        private void _animationTimer_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
+        {
+            try
+            {
+                _currentYPos += 1 * _directionMultiplier;
+              
+                if (_directionMultiplier == 1)
+                {
+                    if (_currentYPos > _deskTopCoords[_destinationDesktop])
+                    {
+                        log("stopping animation timer (greater than)");
+                        _animationTimer.Stop();
+                        _currentDesktop = _destinationDesktop;
+                        _currentYPos = _deskTopCoords[_destinationDesktop];
+                        _event.Set();
+                        _animationInProgress = false;
+                    }
+                }
+                if (_directionMultiplier == -1)
+                {
+                    if (_currentYPos < _deskTopCoords[_destinationDesktop])
+                    {
+                        log("stopping animation timer (less than)");
+                        _animationTimer.Stop();
+                        _currentDesktop = _destinationDesktop;
+                        _currentYPos = _deskTopCoords[_destinationDesktop];
+                        _event.Set();
+                        _animationInProgress = false;
+                    }
+                }
+                if (_currentYPos == _deskTopCoords[_destinationDesktop])
+                {
+                    log("stopping animation timer (equal)");
+                    _animationTimer.Stop();
+                    _currentDesktop = _destinationDesktop;
+                    _currentYPos = _deskTopCoords[_destinationDesktop];
+                    _event.Set();
+                    _animationInProgress = false;
+                }
+
+                log($"timer exit | currentYPos {_currentYPos} : destinationYPos {_deskTopCoords[_destinationDesktop]} ");
+                this.Invalidate();
+            }
+            catch (Exception ex)
+            {
+                log("### Error in timer event ### ");
+            }
+        }
+
+        private void AnimationTimer_Tick(object sender, EventArgs e)
+        {
+            //try
+            //{
+            //    log("timer start");
+            //    var index1 = 10;
+            //    var index2 = 55;
+            //    var index3 = 100;
+
+            //    _currentYPos += 1 * _directionMultiplier;
+            //    log($"_currentYPos : {_currentYPos}");
+            //    log($"_destinationYPos : {_deskTopCoords[_destinationDesktop]}");
+
+
+            //    if (_directionMultiplier == 1)
+            //    {
+            //        if (_currentYPos > _deskTopCoords[_destinationDesktop])
+            //        {
+            //            log("stopping animation timer");
+            //            AnimationTimer.Stop();
+            //            _currentDesktop = _destinationDesktop;
+            //            log("tick calling set: 1");
+            //            _event.Set();
+            //            _animationInProgress = false;
+            //        }
+            //    }
+            //    if (_directionMultiplier == -1)
+            //    {
+            //        if (_currentYPos < _deskTopCoords[_destinationDesktop])
+            //        {
+            //            log("stopping animation timer");
+            //            AnimationTimer.Stop();
+            //            _currentDesktop = _destinationDesktop;
+            //            log("tick calling set : -1");
+            //            _event.Set();
+            //            _animationInProgress = false;
+            //        }
+            //    }
+            //    if (_currentYPos == _deskTopCoords[_destinationDesktop])
+            //    {
+            //        log("stopping animation timer");
+            //        AnimationTimer.Stop();
+            //        _currentDesktop = _destinationDesktop;
+            //        log("tick calling set : they are equal");
+            //        _event.Set();
+            //        _animationInProgress = false;
+            //    }
+
+            //    log($"timer exit {_currentYPos} : {_deskTopCoords[_destinationDesktop]} ");
+            //    this.Invalidate();
+            //}catch(Exception ex)
+            //{
+            //    log("### Error in timer event ### ");
+            //}
+        }
     }
+
+
 }
