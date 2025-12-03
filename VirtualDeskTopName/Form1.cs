@@ -30,7 +30,7 @@ namespace VirtualDeskTopName
         public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 
         private Queue<string> _desktops = new Queue<string>();
-        private Queue<string> _switches;
+        private Queue<Animation> _switches = new Queue<Animation>();
 
        
         private Dictionary<string, int> _deskTopCoords;
@@ -40,6 +40,7 @@ namespace VirtualDeskTopName
         private List<string> _actions = new List<string>();
         private bool _animationInProgress = false;
         private int _currentYPos = 10;
+        private int _destinationYPos = 10;
         private ManualResetEvent _event;
         private System.Timers.Timer _animationTimer;
 
@@ -88,7 +89,7 @@ namespace VirtualDeskTopName
         {
             var sourceRect = new Rectangle(10, _currentYPos, 200, 25);
             var destRect = new Rectangle(15, 10, 200, 25);
-            log($"DrawImage with currentYPos : {_currentYPos}");
+            //log($"DrawImage with currentYPos : {_currentYPos}");
             g.DrawImage(_bitmap, destRect, sourceRect, GraphicsUnit.Pixel);
         }
 
@@ -209,13 +210,28 @@ namespace VirtualDeskTopName
             base.WndProc(ref m);
         }
 
+        // Desktop checker
+        //
         private void timer1_Tick(object sender, EventArgs e)
         {
             var curr = _manager.GetCurrentDesktop();
             var vdname = curr.GetName();
+
             if(vdname != _currentDesktop)
-            {
-                _destinationDesktop = vdname;
+            { 
+                log($" ########## Enqueing : {vdname}");
+                //_destinationDesktop = vdname;
+                _switches.Enqueue
+                    ( new Animation 
+                        { 
+                            Destination = vdname,
+                            DestinationYPos = _deskTopCoords[vdname],
+                            Source = _currentDesktop,
+                            SourceYPos = _deskTopCoords[_currentDesktop]
+                        }
+                    );
+
+                _currentDesktop = vdname;
                 StartAnimation();
             }
            
@@ -315,7 +331,7 @@ namespace VirtualDeskTopName
             _deskTopCoords["Research"] = 100;
 
             _currentYPos = _deskTopCoords[_currentDesktop];
-            _switches = new Queue<string>();
+            _switches = new Queue<Animation>();
         }
 
         private void StartAnimation()
@@ -331,8 +347,8 @@ namespace VirtualDeskTopName
 
                 if (_animationInProgress)
                 {
-                    log("Animation in progress ... returning");
-                    return;
+              //      log("Animation in progress ... returning");
+              //      return;
                 }
                     
               
@@ -340,18 +356,26 @@ namespace VirtualDeskTopName
                 
                 // lock the event, block until animation is done
                 _event.Reset();
-                
-                _currentYPos = _deskTopCoords[_currentDesktop];
-                var tmp = _deskTopCoords[_destinationDesktop];
-                _directionMultiplier = _currentYPos <= tmp ? 1 : -1;
-                
-                _animationTimer.Stop();
-                
-                _animationTimer.Interval = 25; //16;
-                _animationInProgress = true;
-                
-                _animationTimer.Start();
-                
+
+
+                while (_switches.Count > 0)
+                {
+                    var anim = _switches.Dequeue();
+                    _currentYPos = anim.SourceYPos;    //_deskTopCoords[_currentDesktop];
+                    var tmp = anim.DestinationYPos;  //_deskTopCoords[_destinationDesktop];
+                    _destinationYPos = anim.DestinationYPos;
+                    _directionMultiplier = _currentYPos <= tmp ? 1 : -1;
+
+                    _animationTimer.Stop();
+
+                    _animationTimer.Interval = 16; //16;
+                    _animationInProgress = true;
+
+                    _animationTimer.Start();
+
+                }
+
+                _event.Set();
                 
             }catch(Exception ex)
             {
@@ -367,39 +391,39 @@ namespace VirtualDeskTopName
               
                 if (_directionMultiplier == 1)
                 {
-                    if (_currentYPos > _deskTopCoords[_destinationDesktop])
+                    if (_currentYPos > _destinationYPos)
                     {
                         log("stopping animation timer (greater than)");
                         _animationTimer.Stop();
-                        _currentDesktop = _destinationDesktop;
-                        _currentYPos = _deskTopCoords[_destinationDesktop];
-                        _event.Set();
+                        //_currentDesktop = _destinationDesktop;
+                        _currentYPos = _destinationYPos;
+                      //  _event.Set();
                         _animationInProgress = false;
                     }
                 }
                 if (_directionMultiplier == -1)
                 {
-                    if (_currentYPos < _deskTopCoords[_destinationDesktop])
+                    if (_currentYPos < _destinationYPos)
                     {
                         log("stopping animation timer (less than)");
                         _animationTimer.Stop();
-                        _currentDesktop = _destinationDesktop;
-                        _currentYPos = _deskTopCoords[_destinationDesktop];
-                        _event.Set();
+                      //  _currentDesktop = _destinationDesktop;
+                        _currentYPos = _destinationYPos ;
+                      //  _event.Set();
                         _animationInProgress = false;
                     }
                 }
-                if (_currentYPos == _deskTopCoords[_destinationDesktop])
+                if (_currentYPos == _destinationYPos)
                 {
                     log("stopping animation timer (equal)");
                     _animationTimer.Stop();
-                    _currentDesktop = _destinationDesktop;
-                    _currentYPos = _deskTopCoords[_destinationDesktop];
-                    _event.Set();
+                    //_currentDesktop = _destinationDesktop;
+                    _currentYPos = _destinationYPos;
+                 //   _event.Set();
                     _animationInProgress = false;
                 }
 
-                log($"timer exit | currentYPos {_currentYPos} : destinationYPos {_deskTopCoords[_destinationDesktop]} ");
+               // log($"timer exit | currentYPos {_currentYPos} : destinationYPos {_destinationYPos} ");
                 this.Invalidate();
             }
             catch (Exception ex)
